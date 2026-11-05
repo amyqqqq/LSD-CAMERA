@@ -37,7 +37,7 @@
     .intro { width: min(100%, 25rem); padding: 8px; }
     .eyebrow { margin: 0 0 10px; color: var(--accent); letter-spacing: .2em; font-size: .75rem; }
     h1 { margin: 0; font-size: clamp(2rem, 9vw, 3.65rem); line-height: 1; letter-spacing: -.065em; }
-    #status { color: #e1dbea; margin: 18px 0 22px; }
+    #status { color: #e1dbea; margin: 18px 0 22px; overflow-wrap: anywhere; }
     .action {
       display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
       padding: 8px 18px; border: 1px solid #ffffff35; border-radius: 999px;
@@ -46,15 +46,34 @@
     .primary { background: var(--accent); border-color: var(--accent); color: #152008; font-weight: 700; }
     .controls {
       position: absolute; left: 0; right: 0; bottom: 0;
-      display: flex; align-items: center; justify-content: center; gap: 12px;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
       padding: 12px max(12px, env(safe-area-inset-right))
                max(14px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
     }
-    .strength {
-      display: grid; grid-template-columns: 1fr auto; align-items: center;
-      width: min(60vw, 19rem); min-width: 0; padding: 8px 15px 5px; border-radius: 18px;
-      background: var(--glass); border: 1px solid #ffffff2c; font-size: .8rem;
+    .utility { background: var(--glass); padding-inline: clamp(9px, 3vw, 17px); font-size: .85rem; }
+    .utility[aria-expanded=true], .presets button[aria-pressed=true] {
+      background: var(--accent); color: #152008; border-color: var(--accent);
     }
+    .panel {
+      position: absolute; z-index: 1; left: 50%; translate: -50% 0;
+      bottom: calc(86px + max(14px, env(safe-area-inset-bottom)));
+      width: min(92%, 39rem); max-height: min(64%, 36rem); overflow: auto;
+      overscroll-behavior: contain; padding: 14px; border-radius: 20px;
+      border: 1px solid #ffffff35; background: var(--glass);
+    }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .panel-head h2 { margin: 0; }
+    #quality { margin: 0; color: #e1dbea; font-size: .75rem; text-align: right; }
+    .presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0; }
+    .presets button { flex-direction: column; gap: 2px; font-size: .75rem; padding: 4px; line-height: 1.2; }
+    .presets button span { display: block; font-weight: 700; }
+    .settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .setting {
+      display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 4px;
+      min-width: 0; padding: 5px 8px 1px; border: 1px solid #ffffff23;
+      border-radius: 10px; font-size: .74rem;
+    }
+    .setting label { line-height: 1.15; }
     output { color: var(--accent); font-variant-numeric: tabular-nums; }
     input[type=range] { grid-column: 1 / -1; width: 100%; height: 30px; margin: 0; accent-color: var(--accent); }
     #shutter {
@@ -112,13 +131,23 @@
         <path id="fullscreen-icon" d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5"/>
       </svg>
     </button>
-    <div class="controls" id="controls" hidden>
-      <div class="strength">
-        <label for="intensity">效果強度</label>
-        <output id="level" for="intensity" aria-hidden="true">58%</output>
-        <input id="intensity" type="range" min="0" max="100" value="58" aria-valuetext="58%">
+    <section class="panel" id="effects-panel" aria-labelledby="effects-title" hidden>
+      <div class="panel-head">
+        <h2 id="effects-title">效果設定</h2>
+        <p id="quality"></p>
       </div>
+      <div class="presets" id="presets" role="group" aria-label="預設模式">
+        <button class="action" type="button" data-mode="A"><span>A</span>Liquid Echo</button>
+        <button class="action" type="button" data-mode="B"><span>B</span>Infinite Trip</button>
+        <button class="action" type="button" data-mode="C" aria-pressed="true"><span>C</span>Acid Reality</button>
+      </div>
+      <div class="settings" id="settings"></div>
+    </section>
+    <div class="controls" id="controls" hidden>
+      <button class="action utility" id="effects" type="button" aria-controls="effects-panel" aria-expanded="false">效果 · C</button>
+      <button class="action utility" id="clear" type="button" aria-label="清除回授">清除殘影</button>
       <button id="shutter" type="button" aria-label="拍照"></button>
+      <button class="action utility" id="flip" type="button" aria-label="切換前後鏡頭">翻轉</button>
     </div>
     <p id="notice" role="status"></p>
 
@@ -145,232 +174,582 @@
     const gate = $('gate');
     const start = $('start');
     const controls = $('controls');
-    const slider = $('intensity');
     const shutter = $('shutter');
     const fullscreen = $('fullscreen');
     const review = $('review');
     const share = $('share');
+    const panel = $('effects-panel');
+    const effects = $('effects');
 
-    const vertexSource = `
-      attribute vec2 aPosition;
-      varying mediump vec2 vUv;
+    const controlSpecs = [
+      ['intensity', 'Master Intensity', 0, 100, 1, '%'],
+      ['layers', 'Edge Echo Layers', 3, 10, 1, ' 層'],
+      ['spacing', 'Echo Spacing', 2, 18, 1, ' px'],
+      ['threshold', 'Edge Threshold', 0.04, 0.55, 0.01, '', 2],
+      ['expansion', 'Expansion Amount', 0, 100, 1, '%'],
+      ['speed', 'Expansion Speed', 0, 100, 1, '%'],
+      ['feedback', 'Feedback Amount', 0, 100, 1, '%'],
+      ['scale', 'Feedback Scale', 0.96, 1.08, 0.001, '', 3],
+      ['rotation', 'Feedback Rotation', -0.04, 0.04, 0.001, ' rad', 3],
+      ['decay', 'Feedback Decay', 0.65, 0.99, 0.01, '', 2],
+      ['rgb', 'RGB Separation', 0, 100, 1, '%'],
+      ['wave', 'Wave Distortion', 0, 100, 1, '%']
+    ];
+    const presets = {
+      A: { intensity: 78, layers: 7, spacing: 10, threshold: 0.16, expansion: 92, speed: 64,
+        feedback: 24, scale: 1.010, rotation: 0.004, decay: 0.86, rgb: 46, wave: 82 },
+      B: { intensity: 94, layers: 10, spacing: 7, threshold: 0.16, expansion: 62, speed: 52,
+        feedback: 90, scale: 1.035, rotation: 0.019, decay: 0.98, rgb: 86, wave: 44 },
+      C: { intensity: 80, layers: 6, spacing: 8, threshold: 0.18, expansion: 65, speed: 45,
+        feedback: 45, scale: 1.015, rotation: 0.008, decay: 0.94, rgb: 55, wave: 50 }
+    };
+    const settings = { ...presets.C };
+    const referenceShortSide = 390;
+    const framePeriod = 1000 / 30;
+    const qualityLevels = [
+      { pixels: 640000, edge: 0.50, history: 0.50, layers: 10 },
+      { pixels: 500000, edge: 0.46, history: 0.50, layers: 10 },
+      { pixels: 375000, edge: 0.42, history: 0.50, layers: 8 },
+      { pixels: 275000, edge: 0.39, history: 0.46, layers: 6 },
+      { pixels: 195000, edge: 0.36, history: 0.44, layers: 4 },
+      { pixels: 135000, edge: 0.34, history: 0.42, layers: 3 }
+    ];
+
+    const vertexSource = `#version 300 es
+      layout(location=0) in vec2 aPosition;
+      out vec2 vUv;
       void main() {
         vUv = 0.5 * (aPosition + 1.0);
         gl_Position = vec4(aPosition, 0.0, 1.0);
       }
     `;
-
-    const effectSource = `
-      #ifdef GL_FRAGMENT_PRECISION_HIGH
+    const fragmentHeader = `#version 300 es
       precision highp float;
-      #else
-      precision mediump float;
-      #endif
-      varying mediump vec2 vUv;
+      precision highp int;
+      in vec2 vUv;
+    `;
+    const baseSource = `${fragmentHeader}
       uniform sampler2D uCamera;
-      uniform sampler2D uHistory;
-      uniform vec2 uCrop;
       uniform vec2 uMetric;
       uniform float uPhase;
       uniform float uStrength;
-      uniform float uDecay;
+      uniform float uRgb;
+      uniform float uWave;
+      out vec4 outColor;
 
       vec3 cameraAt(vec2 uv) {
-        vec2 cover = (clamp(uv, 0.0, 1.0) - 0.5) * uCrop + 0.5;
-        return texture2D(uCamera, vec2(cover.x, 1.0 - cover.y)).rgb;
+        return texture(uCamera, vec2(uv.x, 1.0 - uv.y)).rgb;
       }
 
       void main() {
         vec3 original = cameraAt(vUv);
         float s = uStrength;
         if (s <= 0.0) {
-          gl_FragColor = vec4(original, 1.0);
+          outColor = vec4(original, 1.0);
           return;
         }
-
         float t = uPhase;
         vec2 p = (vUv - 0.5) * uMetric;
-        // Traveling waves bend the whole image. The slower field stretches it downwards.
         vec2 wave = vec2(sin(13.0*p.y + 3.0*t + 1.6*sin(6.0*p.x - t)),
                          sin(10.0*p.x - 2.0*t + 1.2*sin(8.0*p.y + t)));
         float melt = 0.5 + 0.5*sin(16.0*p.x + 1.8*sin(5.0*p.y + t) - 2.0*t);
         float ripple = sin(18.0*length(p) - 3.0*t + 1.2*sin(7.0*p.x + t));
         float edge = smoothstep(0.0, 0.13, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
         vec2 offset = 0.024*wave + vec2(0.016*ripple, 0.076*melt*melt - 0.020);
-        vec2 warped = vUv + edge*s*offset/uMetric;
-        vec2 split = edge*s*(0.006 + 0.008*melt)*vec2(cos(t), sin(2.0*t))/uMetric;
+        vec2 warped = vUv + edge*s*uWave*offset/uMetric;
+        vec2 split = edge*s*uRgb*(0.006 + 0.008*melt)*vec2(cos(t), sin(2.0*t))/uMetric;
         vec3 color = vec3(cameraAt(warped + split).r,
                           cameraAt(warped).g,
                           cameraAt(warped - split).b);
 
-        // Rotate chroma and retain image luminance. A flowing tint also colors neutral scenes.
+        // Retain luminance and a portion of the source to keep subjects recognizable.
         float lum = dot(color, vec3(0.299, 0.587, 0.114));
         vec2 chroma = vec2(color.b - lum, color.r - lum);
-        float angle = s*(2.6*sin(t + 2.0*p.x) + 1.4*sin(2.0*t - 3.0*p.y));
+        float angle = s*(2.2*sin(t + 2.0*p.x) + 1.1*sin(2.0*t - 3.0*p.y));
         float c = cos(angle);
         float k = sin(angle);
-        chroma = mat2(c, k, -k, c)*chroma*(1.0 + 0.53*s);
+        chroma = mat2(c, k, -k, c)*chroma*(1.0 + 0.42*s);
         color = vec3(lum + chroma.y, lum - (0.114*chroma.x + 0.299*chroma.y)/0.587, lum + chroma.x);
         vec3 palette = sin(vec3(0.0, 2.0944, 4.1888) + 2.0*t + 5.0*p.x - 4.0*p.y + melt);
-        color += palette * (0.23*s) * (4.0*lum*(1.0-lum));
-        color = mix(clamp(color, 0.0, 1.0), original, 0.10 + 0.13*s);
-
-        // Read only the previous framebuffer. Slight drift makes older frames trail behind.
-        vec2 drift = edge*s*vec2(0.013*wave.x, 0.012 + 0.009*wave.y)/uMetric;
-        vec3 history = texture2D(uHistory, vUv + drift).rgb;
-        gl_FragColor = vec4(mix(color, history, uDecay), 1.0);
+        color += palette * (0.17*s) * (4.0*lum*(1.0-lum));
+        outColor = vec4(mix(clamp(color, 0.0, 1.0), original, 0.16 + 0.14*s), 1.0);
       }
     `;
 
-    const displaySource = `
-      precision mediump float;
-      varying mediump vec2 vUv;
-      uniform sampler2D uImage;
-      void main() { gl_FragColor = texture2D(uImage, vUv); }
+    const edgeSource = `${fragmentHeader}
+      uniform sampler2D uBase;
+      uniform vec2 uTexel;
+      uniform float uThreshold;
+      layout(location=0) out uvec2 outSeed;
+
+      float luma(float x, float y) {
+        return dot(texture(uBase, vUv + vec2(x,y)*uTexel).rgb, vec3(0.299, 0.587, 0.114));
+      }
+
+      void main() {
+        float tl = luma(-1.0, 1.0), t = luma(0.0, 1.0), tr = luma(1.0, 1.0);
+        float  l = luma(-1.0, 0.0),                    r = luma(1.0, 0.0);
+        float bl = luma(-1.0,-1.0), b = luma(0.0,-1.0), br = luma(1.0,-1.0);
+        vec2 gradient = 0.25 * vec2(tr + 2.0*r + br - tl - 2.0*l - bl,
+                                    tl + 2.0*t + tr - bl - 2.0*b - br);
+        // A zero coordinate is reserved for empty texels. All edge sites are one-based.
+        outSeed = dot(gradient, gradient) >= uThreshold*uThreshold
+          ? uvec2(gl_FragCoord.xy) + uvec2(1) : uvec2(0);
+      }
     `;
 
-    const pixelBudgets = [720000, 510000, 350000, 230000, 155000];
-    const framePeriod = 1000 / 30;
+    const floodSource = `${fragmentHeader}
+      uniform highp usampler2D uSeeds;
+      uniform int uJump;
+      layout(location=0) out uvec2 outSeed;
 
-    function program(gl, vertex, fragmentSource, uniformNames) {
-      const fragment = gl.createShader(gl.FRAGMENT_SHADER);
-      gl.shaderSource(fragment, fragmentSource);
-      gl.compileShader(fragment);
-      if (!gl.getShaderParameter(fragment, gl.COMPILE_STATUS)) {
-        throw new Error(gl.getShaderInfoLog(fragment));
+      void main() {
+        ivec2 p = ivec2(gl_FragCoord.xy);
+        ivec2 limit = textureSize(uSeeds, 0) - 1;
+        uvec2 best = uvec2(0);
+        float bestDistance = 1e20;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            ivec2 tap = clamp(p + ivec2(x,y)*uJump, ivec2(0), limit);
+            uvec2 site = texelFetch(uSeeds, tap, 0).rg;
+            vec2 delta = vec2(site) - 1.0 - vec2(p);
+            float d = dot(delta, delta);
+            if (site.x != 0u && d < bestDistance) {
+              bestDistance = d;
+              best = site;
+            }
+          }
+        }
+        outSeed = best;
       }
-      const handle = gl.createProgram();
-      gl.attachShader(handle, vertex);
-      gl.attachShader(handle, fragment);
-      gl.bindAttribLocation(handle, 0, 'aPosition');
-      gl.linkProgram(handle);
-      gl.deleteShader(fragment);
-      if (!gl.getProgramParameter(handle, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(handle));
+    `;
+
+    const echoSource = `${fragmentHeader}
+      uniform sampler2D uBase;
+      uniform highp usampler2D uSeeds;
+      uniform vec2 uMetric;
+      uniform float uEdgeUnit;
+      uniform float uStrength;
+      uniform float uPhase;
+      uniform float uTravel;
+      uniform float uSpacing;
+      uniform float uExpansion;
+      uniform float uLayers;
+      out vec4 outColor;
+
+      void main() {
+        vec3 base = texture(uBase, vUv).rgb;
+        ivec2 size = textureSize(uSeeds, 0);
+        vec2 p = vUv*vec2(size) - 0.5;
+        float soft = clamp(0.56*uEdgeUnit*max(length(dFdx(p)), length(dFdy(p))), 0.55, 1.8);
+        uvec2 site = texelFetch(uSeeds, clamp(ivec2(p + 0.5), ivec2(0), size - 1), 0).rg;
+        if (site.x == 0u) {
+          outColor = vec4(base, 1.0);
+          return;
+        }
+
+        // Isolines of unsigned distance expand on both sides of either contrast polarity.
+        // Each pixel needs only the nearest ring, even when ten are visible.
+        vec2 seed = vec2(site) - 1.0;
+        float distancePx = length(p - seed) * uEdgeUnit;
+        vec2 field = ((seed + 0.5)/vec2(size) - 0.5) * uMetric;
+        float t = uPhase;
+        float liquid = 0.38 + 0.18*sin(10.0*field.x + 2.0*t + sin(8.0*field.y - t))
+                            + 0.09*sin(14.0*field.y - 3.0*t);
+        float gap = uSpacing*(1.0 + uExpansion*liquid);
+        float jitter = min(1.4, gap*0.16)*sin(24.0*field.x + 17.0*field.y + 7.0*t);
+        float radial = (distancePx - jitter)/gap;
+        float travel = fract(uTravel);
+        float layer = floor(radial - travel - 0.85 + 0.5);
+        float shell = layer + travel;
+        float errorPx = abs(distancePx - jitter - gap*(shell + 0.85));
+        float halfWidth = min(1.9, gap*0.32);
+        float stroke = 1.0 - smoothstep(max(0.0, halfWidth-soft), halfWidth+soft, errorPx);
+        float age = shell/uLayers;
+        float life = smoothstep(0.0, 0.21, shell)
+                   * (1.0-smoothstep(uLayers-0.28, uLayers, shell));
+        // The hue follows the emitted shell across a cycle wrap.
+        float hue = (layer - floor(uTravel))*(6.2831853*7.0/24.0) + 2.0*t + 2.0*field.y;
+        vec3 ink = 0.54 + 0.45*cos(hue + vec3(0.0, 2.094395, 4.188790));
+        float opacity = uStrength*stroke*life*(0.78-0.42*clamp(age, 0.0, 1.0));
+        outColor = vec4(mix(base, ink, opacity), 1.0);
       }
-      const uniforms = {};
-      for (const name of uniformNames) uniforms[name] = gl.getUniformLocation(handle, name);
-      return { handle, ...uniforms };
+    `;
+
+    const feedbackBody = `
+      uniform sampler2D uCurrent;
+      uniform sampler2D uHistory;
+      uniform vec2 uMetric;
+      uniform vec2 uSpin;
+      uniform vec2 uDrift;
+      uniform float uMix;
+
+      vec3 composite(vec2 uv) {
+        vec3 current = texture(uCurrent, uv).rgb;
+        if (uMix <= 0.0) return current;
+        vec2 p = (uv - 0.5)*uMetric - uDrift;
+        vec2 prevUv = mat2(uSpin.x, uSpin.y, -uSpin.y, uSpin.x)*p/uMetric + 0.5;
+        vec2 edge = min(prevUv, 1.0 - prevUv);
+        float coverage = smoothstep(-0.012, 0.012, min(edge.x, edge.y));
+        // A convex blend attenuates history without additive brightness buildup.
+        return mix(current, texture(uHistory, prevUv).rgb, uMix*coverage);
+      }
+    `;
+    const feedbackSource = `${fragmentHeader}
+      ${feedbackBody}
+      out vec4 outColor;
+      void main() { outColor = vec4(composite(vUv), 1.0); }
+    `;
+    const finalSource = `${fragmentHeader}
+      ${feedbackBody}
+      uniform vec2 uCrop;
+      out vec4 outColor;
+      void main() { outColor = vec4(composite((vUv - 0.5)*uCrop + 0.5), 1.0); }
+    `;
+
+    function compileShader(gl, type, source, label) {
+      const shader = gl.createShader(type);
+      if (!shader) throw new Error(label + ' shader 無法配置');
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+      const log = gl.getShaderInfoLog(shader);
+      gl.deleteShader(shader);
+      throw new Error(label + ' shader 編譯失敗 · ' + (log || '無編譯紀錄'));
     }
 
     function makeRenderer() {
-      const gl = canvas.getContext('webgl', {
+      const gl = canvas.getContext('webgl2', {
         alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false
       });
-      if (!gl || gl.isContextLost()) throw new Error('WebGL unavailable');
+      if (!gl) throw new Error('此瀏覽器無法啟用 WebGL 2。請使用支援 WebGL 2 的 Chrome 或 Safari。');
+      if (gl.isContextLost()) throw new Error('WebGL 2 圖形環境尚未恢復。');
 
-      const vertex = gl.createShader(gl.VERTEX_SHADER);
-      gl.shaderSource(vertex, vertexSource);
-      gl.compileShader(vertex);
-      if (!gl.getShaderParameter(vertex, gl.COMPILE_STATUS)) {
-        throw new Error(gl.getShaderInfoLog(vertex));
+      const programs = [];
+      const textures = [];
+      const framebuffers = [];
+      let triangle;
+      let timer;
+
+      function createProgram(vertex, source, label, uniformNames) {
+        const fragment = compileShader(gl, gl.FRAGMENT_SHADER, source, label);
+        const handle = gl.createProgram();
+        if (!handle) {
+          gl.deleteShader(fragment);
+          throw new Error(label + ' program 無法配置');
+        }
+        programs.push(handle);
+        gl.attachShader(handle, vertex);
+        gl.attachShader(handle, fragment);
+        gl.linkProgram(handle);
+        gl.deleteShader(fragment);
+        if (!gl.getProgramParameter(handle, gl.LINK_STATUS)) {
+          throw new Error(label + ' program 連結失敗 · ' + (gl.getProgramInfoLog(handle) || '無連結紀錄'));
+        }
+        const uniforms = {};
+        for (const name of uniformNames.split(' ')) uniforms[name] = gl.getUniformLocation(handle, name);
+        return { handle, ...uniforms };
       }
-      const fx = program(gl, vertex, effectSource, [
-        'uCamera', 'uHistory', 'uCrop', 'uMetric', 'uPhase', 'uStrength', 'uDecay'
-      ]);
-      const copy = program(gl, vertex, displaySource, ['uImage']);
-      gl.deleteShader(vertex);
-      gl.disable(gl.DITHER);
-      const triangle = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, triangle);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-      function createTexture() {
+      function createTexture(filter, label) {
         const texture = gl.createTexture();
+        if (!texture) throw new Error(label + ' texture 無法配置');
+        textures.push(texture);
         gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         return texture;
       }
 
-      const cameraTexture = createTexture();
-      const targets = [0, 1].map(() => ({
-        texture: createTexture(), framebuffer: gl.createFramebuffer()
-      }));
-      const maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-      const maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
-      let last = 0;
-      let valid = false;
-      let width = 0;
-      let height = 0;
-      let sourceWidth = 0;
-      let sourceHeight = 0;
+      function createTarget(label, integer = false) {
+        const texture = createTexture(integer ? gl.NEAREST : gl.LINEAR, label);
+        const framebuffer = gl.createFramebuffer();
+        if (!framebuffer) throw new Error(label + ' framebuffer 無法配置');
+        framebuffers.push(framebuffer);
+        return { label, texture, framebuffer, integer, width: 0, height: 0 };
+      }
 
-      function resize(cssWidth, cssHeight, budget) {
-        const scale = Math.min(devicePixelRatio || 1, Math.sqrt(budget / (cssWidth * cssHeight)),
-          maxTexture / Math.max(cssWidth, cssHeight), maxViewport[0] / cssWidth, maxViewport[1] / cssHeight);
-        const w = Math.max(1, Math.floor(cssWidth * scale));
-        const h = Math.max(1, Math.floor(cssHeight * scale));
-        if (w === width && h === height) return false;
-        canvas.width = width = w;
-        canvas.height = height = h;
-        gl.viewport(0, 0, w, h);
+      function allocate(target, width, height) {
+        if (target.width === width && target.height === height) return;
         gl.activeTexture(gl.TEXTURE0);
-        for (const { texture, framebuffer } of targets) {
-          gl.bindTexture(gl.TEXTURE_2D, texture);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-          gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-            throw new Error('Incomplete filter framebuffer');
-          }
+        gl.bindTexture(gl.TEXTURE_2D, target.texture);
+        const format = target.integer ? gl.RG_INTEGER : gl.RGBA;
+        const storage = target.integer ? gl.RG16UI : gl.RGBA8;
+        const type = target.integer ? gl.UNSIGNED_SHORT : gl.UNSIGNED_BYTE;
+        gl.texImage2D(gl.TEXTURE_2D, 0, storage, width, height, 0, format, type, null);
+        const error = gl.getError();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (error !== gl.NO_ERROR || status !== gl.FRAMEBUFFER_COMPLETE) {
+          throw new Error(target.label + ' framebuffer 配置失敗 · ' + width + '×' + height
+            + ' · status 0x' + status.toString(16) + ' · GL 0x' + error.toString(16));
         }
+        target.width = width;
+        target.height = height;
+      }
+
+      const uniformFeedback = 'uCurrent uHistory uMetric uSpin uDrift uMix';
+      let base, edge, flood, echo, feedback, final, cameraTexture;
+      let baseTarget, echoTarget, seeds, history;
+      const extension = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      try {
+        const vertex = compileShader(gl, gl.VERTEX_SHADER, vertexSource, 'Fullscreen triangle');
+        try {
+          base = createProgram(vertex, baseSource, 'Camera Base', 'uCamera uMetric uPhase uStrength uRgb uWave');
+          edge = createProgram(vertex, edgeSource, 'Sobel Edge', 'uBase uTexel uThreshold');
+          flood = createProgram(vertex, floodSource, 'Edge Distance', 'uSeeds uJump');
+          echo = createProgram(vertex, echoSource, 'Echo Expansion',
+            'uBase uSeeds uMetric uEdgeUnit uStrength uPhase uTravel uSpacing uExpansion uLayers');
+          feedback = createProgram(vertex, feedbackSource, 'Recursive Feedback', uniformFeedback);
+          final = createProgram(vertex, finalSource, 'Final Composite', uniformFeedback + ' uCrop');
+        } finally {
+          gl.deleteShader(vertex);
+        }
+        gl.disable(gl.DITHER);
+        triangle = gl.createBuffer();
+        if (!triangle) throw new Error('Fullscreen triangle buffer 無法配置');
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangle);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        cameraTexture = createTexture(gl.LINEAR, 'Camera source');
+        baseTarget = createTarget('Camera Base');
+        echoTarget = createTarget('Echo Expansion');
+        seeds = [createTarget('Edge Distance A', true), createTarget('Edge Distance B', true)];
+        history = [createTarget('Feedback A'), createTarget('Feedback B')];
+        if (extension) timer = gl.createQuery();
+      } catch (error) {
+        for (const handle of programs) gl.deleteProgram(handle);
+        for (const texture of textures) gl.deleteTexture(texture);
+        for (const framebuffer of framebuffers) gl.deleteFramebuffer(framebuffer);
+        if (triangle) gl.deleteBuffer(triangle);
+        throw error;
+      }
+
+      const maxTexture = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 65534);
+      const maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+      const zero = new Float32Array([0, 0, 0, 1]);
+      let nativeWidth = 0, nativeHeight = 0, screenWidth = 0, screenHeight = 0;
+      let metricX = 1, metricY = 1, edgeUnit = 1, edgeTap = 1;
+      let sourceWidth = 0, sourceHeight = 0, cropX = 1, cropY = 1;
+      let current = baseTarget;
+      let last = 0, shownHistory = 0, valid = false;
+      let mix = 0, spinX = 1, spinY = 0, driftX = 0, driftY = 0;
+      let frameCount = 0, pendingQuery = false, gpuMs = 0;
+
+      function sized(width, height, budget, maxScale) {
+        const scale = Math.min(maxScale, Math.sqrt(budget/(width*height)),
+          maxTexture/Math.max(width,height), maxViewport[0]/width, maxViewport[1]/height);
+        return [Math.max(1, Math.round(width*scale)), Math.max(1, Math.round(height*scale))];
+      }
+
+      function resetHistory(clear = false) {
         valid = false;
-        return true;
+        mix = 0;
+        if (clear && nativeWidth) {
+          for (const target of history) {
+            if (!target.width) continue;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.clearBufferfv(gl.COLOR, 0, zero);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
       }
 
-      function present() {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.useProgram(copy.handle);
+      function resize(cssWidth, cssHeight, level) {
+        const [w, h] = sized(video.videoWidth, video.videoHeight, level.pixels, 1);
+        [screenWidth, screenHeight] = sized(cssWidth, cssHeight, level.pixels, devicePixelRatio || 1);
+        const sourceAspect = video.videoWidth/video.videoHeight;
+        const screenAspect = screenWidth/screenHeight;
+        metricX = Math.max(1, sourceAspect);
+        metricY = Math.max(1, 1/sourceAspect);
+        cropX = Math.min(1, screenAspect/sourceAspect);
+        cropY = Math.min(1, sourceAspect/screenAspect);
+        if (canvas.width !== screenWidth) canvas.width = screenWidth;
+        if (canvas.height !== screenHeight) canvas.height = screenHeight;
+
+        const edgeWidth = Math.max(1, Math.round(w*level.edge));
+        const edgeHeight = Math.max(1, Math.round(h*level.edge));
+        const historyWidth = Math.max(1, Math.round(w*level.history));
+        const historyHeight = Math.max(1, Math.round(h*level.history));
+        if (w !== nativeWidth || h !== nativeHeight || edgeWidth !== seeds[0].width || edgeHeight !== seeds[0].height
+            || historyWidth !== history[0].width || historyHeight !== history[0].height) {
+          nativeWidth = nativeHeight = 0;
+          resetHistory();
+          edgeUnit = referenceShortSide/Math.min(edgeWidth, edgeHeight);
+          edgeTap = Math.max(0.85, 1.45/edgeUnit);
+          allocate(baseTarget, w, h);
+          allocate(echoTarget, w, h);
+          for (const target of seeds) allocate(target, edgeWidth, edgeHeight);
+          for (const target of history) allocate(target, historyWidth, historyHeight);
+          nativeWidth = w;
+          nativeHeight = h;
+          gpuMs = 0;
+        }
+      }
+
+      function bind(target, pass, texture0, texture1) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target?.framebuffer ?? null);
+        gl.viewport(0, 0, target?.width ?? canvas.width, target?.height ?? canvas.height);
+        gl.useProgram(pass.handle);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, targets[last].texture);
-        gl.uniform1i(copy.uImage, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindTexture(gl.TEXTURE_2D, texture0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, texture1 ?? null);
       }
 
-      function draw(phase, strength, elapsed, upload) {
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
+      function trianglePass() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+      function contours(phase, travel, strength, layers) {
+        bind(seeds[0], edge, baseTarget.texture);
+        gl.uniform1i(edge.uBase, 0);
+        gl.uniform2f(edge.uTexel, edgeTap/seeds[0].width, edgeTap/seeds[0].height);
+        gl.uniform1f(edge.uThreshold, settings.threshold);
+        trianglePass();
+
+        // Search far enough for the visible rings, then refine at unit distance twice.
+        const radius = settings.spacing*(layers + 1)*1.65 + 5;
+        let step = 2**Math.floor(Math.log2(Math.max(1, radius/edgeUnit)));
+        let read = 0;
+        while (step >= 1) {
+          bind(seeds[1-read], flood, seeds[read].texture);
+          gl.uniform1i(flood.uSeeds, 0);
+          gl.uniform1i(flood.uJump, step);
+          trianglePass();
+          read = 1-read;
+          step /= 2;
+        }
+        bind(seeds[1-read], flood, seeds[read].texture);
+        gl.uniform1i(flood.uSeeds, 0);
+        gl.uniform1i(flood.uJump, 1);
+        trianglePass();
+
+        bind(echoTarget, echo, baseTarget.texture, seeds[1-read].texture);
+        gl.uniform1i(echo.uBase, 0);
+        gl.uniform1i(echo.uSeeds, 1);
+        gl.uniform2f(echo.uMetric, metricX, metricY);
+        gl.uniform1f(echo.uEdgeUnit, edgeUnit);
+        gl.uniform1f(echo.uStrength, strength);
+        gl.uniform1f(echo.uPhase, phase);
+        gl.uniform1f(echo.uTravel, travel);
+        gl.uniform1f(echo.uSpacing, settings.spacing);
+        gl.uniform1f(echo.uExpansion, settings.expansion/100);
+        gl.uniform1f(echo.uLayers, layers);
+        trianglePass();
+      }
+
+      function bindComposite(target, pass) {
+        bind(target, pass, current.texture, history[shownHistory].texture);
+        gl.uniform1i(pass.uCurrent, 0);
+        gl.uniform1i(pass.uHistory, 1);
+        gl.uniform2f(pass.uMetric, metricX, metricY);
+        gl.uniform2f(pass.uSpin, spinX, spinY);
+        gl.uniform2f(pass.uDrift, driftX, driftY);
+        gl.uniform1f(pass.uMix, mix);
+      }
+
+      function present(fullImage = false) {
+        bindComposite(null, final);
+        gl.uniform2f(final.uCrop, fullImage ? 1 : cropX, fullImage ? 1 : cropY);
+        trianglePass();
+      }
+
+      function draw(phase, travel, elapsed, upload, layers) {
+        const vw = video.videoWidth, vh = video.videoHeight;
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, cameraTexture);
         if (vw !== sourceWidth || vh !== sourceHeight) {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          const error = gl.getError();
+          if (error !== gl.NO_ERROR) throw new Error('Camera Base 影像紋理上傳失敗 · GL 0x' + error.toString(16));
           sourceWidth = vw;
           sourceHeight = vh;
-          valid = false;
+          resetHistory();
         } else if (upload) {
           gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
         }
 
-        const next = 1 - last;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[next].framebuffer);
-        gl.useProgram(fx.handle);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, targets[last].texture);
-        gl.uniform1i(fx.uCamera, 0);
-        gl.uniform1i(fx.uHistory, 1);
-        const aspect = width / height;
-        const sourceAspect = vw / vh;
-        gl.uniform2f(fx.uCrop, Math.min(1, aspect / sourceAspect), Math.min(1, sourceAspect / aspect));
-        gl.uniform2f(fx.uMetric, Math.max(1, aspect), Math.max(1, 1 / aspect));
-        gl.uniform1f(fx.uPhase, phase);
-        gl.uniform1f(fx.uStrength, strength);
-        gl.uniform1f(fx.uDecay, valid ? Math.pow(0.76 * strength, Math.max(0.5, elapsed / framePeriod)) : 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        last = next;
-        valid = true;
+        const strength = settings.intensity/100;
+        bind(baseTarget, base, cameraTexture);
+        gl.uniform1i(base.uCamera, 0);
+        gl.uniform2f(base.uMetric, metricX, metricY);
+        gl.uniform1f(base.uPhase, phase);
+        gl.uniform1f(base.uStrength, strength);
+        gl.uniform1f(base.uRgb, settings.rgb/100);
+        gl.uniform1f(base.uWave, settings.wave/100);
+        trianglePass();
+        current = baseTarget;
+        if (strength > 0) {
+          contours(phase, travel, strength, layers);
+          current = echoTarget;
+        }
+
+        const steps = Math.min(4, Math.max(0.5, elapsed/framePeriod));
+        const weight = Math.min(0.90, 1.45*settings.feedback/100*strength);
+        mix = valid ? Math.pow(weight*settings.decay, steps) : 0;
+        shownHistory = last;
+        if (weight > 0) {
+          const angle = -settings.rotation*steps;
+          const scale = Math.pow(settings.scale, -steps);
+          spinX = Math.cos(angle)*scale;
+          spinY = Math.sin(angle)*scale;
+          driftX = 0.0030*Math.sin(2*phase)*steps;
+          driftY = (0.0015 + 0.0025*Math.cos(3*phase))*steps;
+          // The displayed result uses the same previous texture as this write.
+          // The current image stays full-resolution while only history is upsampled.
+          bindComposite(history[1-last], feedback);
+          trianglePass();
+          last = 1-last;
+          valid = true;
+        } else {
+          valid = false;
+        }
         present();
       }
 
-      return { resize, draw, present, resetHistory: () => { valid = false; } };
+      function timedDraw(...args) {
+        if (timer && pendingQuery && gl.getQueryParameter(timer, gl.QUERY_RESULT_AVAILABLE)) {
+          if (!gl.getParameter(extension.GPU_DISJOINT_EXT)) {
+            const ms = gl.getQueryParameter(timer, gl.QUERY_RESULT)/1e6;
+            if (ms > 0 && ms < 1000) gpuMs = gpuMs ? 0.8*gpuMs + 0.2*ms : ms;
+          }
+          pendingQuery = false;
+        }
+        const measure = timer && !pendingQuery && ++frameCount % 12 === 0;
+        if (measure) gl.beginQuery(extension.TIME_ELAPSED_EXT, timer);
+        try {
+          draw(...args);
+        } finally {
+          if (measure) {
+            gl.endQuery(extension.TIME_ELAPSED_EXT);
+            pendingQuery = true;
+          }
+        }
+      }
+
+      function capture(callback) {
+        try {
+          if (canvas.width !== nativeWidth) canvas.width = nativeWidth;
+          if (canvas.height !== nativeHeight) canvas.height = nativeHeight;
+          present(true);
+          canvas.toBlob(callback, 'image/jpeg', 0.92);
+        } finally {
+          if (canvas.width !== screenWidth) canvas.width = screenWidth;
+          if (canvas.height !== screenHeight) canvas.height = screenHeight;
+          present();
+        }
+      }
+
+      return { resize, draw: timedDraw, capture, resetHistory,
+        isLost: () => gl.isContextLost(), gpuTime: () => gpuMs };
     }
 
     let renderer;
     let stream;
+    let cameraTrack;
     let starting = false;
     let running = false;
     let session = 0;
@@ -386,15 +765,100 @@
     let nextFrame = 0;
     let lastFrame = 0;
     let playDeadline = 0;
-    let strength = Number(slider.value) / 100;
+    let lastSourceWidth = 0;
+    let lastSourceHeight = 0;
+    let expansionClock = 0.32;
+    let facing = 'environment';
+    let resumePending = false;
+    let contextLost = false;
     let photoUrl;
     let photoFile;
     let noticeTimer;
+
+    function setPanel(open) {
+      panel.hidden = !open;
+      effects.setAttribute('aria-expanded', String(open));
+    }
+
+    function effectiveLayers() {
+      return Math.min(settings.layers, qualityLevels[quality].layers);
+    }
+
+    function updateQuality() {
+      $('quality').textContent = '自動畫質 ' + (quality + 1) + '/' + qualityLevels.length
+        + ' · 實際 ' + effectiveLayers() + ' 層';
+    }
+
+    const presetButtons = Array.from($('presets').querySelectorAll('button'));
+    const settingInputs = new Map();
+    function updateSetting(input, output, unit, digits) {
+      const value = Number(input.value).toFixed(digits) + unit;
+      output.textContent = value;
+      input.setAttribute('aria-valuetext', value);
+    }
+
+    function showMode(mode) {
+      for (const button of presetButtons) {
+        button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
+      }
+      effects.textContent = '效果 · ' + (mode || '自訂');
+    }
+
+    for (const [id, label, min, max, step, unit, digits = 0] of controlSpecs) {
+      const row = document.createElement('div');
+      row.className = 'setting';
+      const name = document.createElement('label');
+      name.htmlFor = id;
+      name.textContent = label;
+      const output = document.createElement('output');
+      output.setAttribute('for', id);
+      output.setAttribute('aria-hidden', 'true');
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'range', id, min, max, step, value: settings[id] });
+      const refresh = () => updateSetting(input, output, unit, digits);
+      refresh();
+      input.addEventListener('input', () => {
+        const wasOff = settings[id] === 0;
+        settings[id] = Number(input.value);
+        if (id === 'intensity' || id === 'feedback') {
+          if (wasOff !== (settings[id] === 0)) renderer?.resetHistory(true);
+        }
+        refresh();
+        showMode('');
+        updateQuality();
+      });
+      settingInputs.set(id, { input, refresh });
+      row.append(name, output, input);
+      $('settings').append(row);
+    }
+    for (const button of presetButtons) {
+      button.addEventListener('click', () => {
+        const mode = button.dataset.mode;
+        Object.assign(settings, presets[mode]);
+        for (const [id, { input, refresh }] of settingInputs) {
+          input.value = settings[id];
+          refresh();
+        }
+        expansionClock = 0.32;
+        renderer?.resetHistory(true);
+        showMode(mode);
+        updateQuality();
+      });
+    }
+    showMode('C');
+    updateQuality();
+    effects.addEventListener('click', () => setPanel(panel.hidden));
+    $('clear').addEventListener('click', () => {
+      renderer?.resetHistory(true);
+      nextFrame = 0;
+      notify('已清除回授');
+    });
 
     function cameraScreen(message, canRetry = false) {
       gate.hidden = false;
       controls.hidden = true;
       fullscreen.hidden = true;
+      setPanel(false);
       $('status').textContent = message;
       start.hidden = !canRetry;
     }
@@ -420,7 +884,10 @@
       videoRequest = null;
       stream?.getTracks().forEach((track) => track.stop());
       stream = undefined;
+      cameraTrack = undefined;
       video.srcObject = null;
+      renderer?.resetHistory(true);
+      lastSourceWidth = lastSourceHeight = 0;
       resetTiming();
     }
 
@@ -435,15 +902,18 @@
       const duration = now - sampleStart;
       if (duration < 2100) return;
       const fps = 1000 * (sampleFrames - 1) / duration;
-      if (fps < 28 && quality < pixelBudgets.length - 1) {
+      const gpuMs = renderer.gpuTime();
+      if ((fps < 27.8 || gpuMs > 27) && quality < qualityLevels.length - 1) {
         quality++;
         sizeDirty = true;
         stableWindows = 0;
-      } else if (fps >= 29.5 && quality > 0) {
+        updateQuality();
+      } else if (fps >= 29.5 && gpuMs < 17 && quality > 0) {
         if (++stableWindows >= 7) {
           quality--;
           sizeDirty = true;
           stableWindows = 0;
+          updateQuality();
         }
       } else {
         stableWindows = 0;
@@ -455,27 +925,33 @@
     function render(now) {
       if (document.hidden || !stream) return;
       frameRequest = requestAnimationFrame(render);
-      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
+      if (cameraTrack?.muted || video.paused ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
         if (now > playDeadline) fail('相機未送出畫面。請確認相機可用後再試一次。');
         return;
       }
       playDeadline = now + 8000;
+      const sourceChanged = lastSourceWidth !== video.videoWidth || lastSourceHeight !== video.videoHeight;
       // A small tolerance avoids dropping frames at refresh rates near 60 Hz.
-      if (now + 1.5 < nextFrame && !sizeDirty) return;
+      if (now + 1.5 < nextFrame && !sizeDirty && !sourceChanged) return;
       nextFrame = nextFrame && now - nextFrame < framePeriod ? nextFrame + framePeriod : now + framePeriod;
       try {
-        if (sizeDirty) {
-          renderer.resize(app.clientWidth || 1, app.clientHeight || 1, pixelBudgets[quality]);
+        if (sizeDirty || sourceChanged) {
+          renderer.resize(app.clientWidth || 1, app.clientHeight || 1, qualityLevels[quality]);
+          lastSourceWidth = video.videoWidth;
+          lastSourceHeight = video.videoHeight;
           sizeDirty = false;
         }
         const upload = videoDirty || (!video.requestVideoFrameCallback && previousVideoTime !== video.currentTime);
-        renderer.draw((now * 0.00048) % (2 * Math.PI), strength, lastFrame ? now - lastFrame : framePeriod, upload);
+        const elapsed = lastFrame ? now - lastFrame : framePeriod;
+        expansionClock = (expansionClock + Math.min(100, elapsed)*0.0022*settings.speed/100) % 24;
+        renderer.draw((now * 0.00048) % (2 * Math.PI), expansionClock, elapsed, upload, effectiveLayers());
         previousVideoTime = video.currentTime;
         videoDirty = false;
       } catch (error) {
-        if (canvas.getContext('webgl')?.isContextLost()) return;
+        if (renderer?.isLost()) return;
         console.error(error);
-        fail('無法處理相機畫面。請重新啟動相機。');
+        fail('無法處理相機畫面。' + error.message);
         return;
       }
       lastFrame = now;
@@ -490,7 +966,9 @@
 
     function watchVideo() {
       if (!video.requestVideoFrameCallback || videoRequest !== null) return;
+      const current = session;
       function onFrame() {
+        if (current !== session) return;
         videoDirty = true;
         videoRequest = video.requestVideoFrameCallback(onFrame);
       }
@@ -513,8 +991,13 @@
       }
     }
 
-    async function startCamera() {
-      if (starting || stream) return;
+    async function startCamera({ direction = facing, switching = false } = {}) {
+      if (starting || stream || contextLost) return;
+      if (document.hidden) {
+        resumePending = true;
+        return;
+      }
+      resumePending = false;
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         cameraScreen('請用 Android Chrome 或 iPhone Safari 開啟 HTTPS 網址。電腦也可使用 localhost 測試。');
         return;
@@ -526,13 +1009,13 @@
         renderer ??= makeRenderer();
       } catch (error) {
         console.error(error);
-        fail('瀏覽器無法啟用 WebGL。請確認瀏覽器支援 WebGL，再試一次。');
+        fail(error.message);
         return;
       }
 
       try {
         const preferred = {
-          facingMode: { ideal: 'environment' },
+          facingMode: switching ? { exact: direction } : { ideal: direction },
           width: { ideal: 1280 }, height: { ideal: 720 },
           frameRate: { ideal: 30, max: 30 }
         };
@@ -540,7 +1023,7 @@
         try {
           acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: preferred });
         } catch (error) {
-          if (current !== session || !['OverconstrainedError', 'NotFoundError'].includes(error.name)) throw error;
+          if (switching || current !== session || !['OverconstrainedError', 'NotFoundError'].includes(error.name)) throw error;
           acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
         }
         if (current !== session) {
@@ -548,8 +1031,17 @@
           return;
         }
         stream = acquired;
-        stream.getVideoTracks()[0].addEventListener('ended', () => {
+        const track = stream.getVideoTracks()[0];
+        cameraTrack = track;
+        const reported = track.getSettings?.().facingMode;
+        facing = reported === 'environment' || reported === 'user' ? reported : direction;
+        track.addEventListener('ended', () => {
           if (current === session) fail('相機已中斷。請按「啟動相機」重新連線。');
+        });
+        track.addEventListener('unmute', () => {
+          if (current !== session) return;
+          renderer.resetHistory(true);
+          videoDirty = true;
         });
         video.srcObject = stream;
         resetTiming();
@@ -565,7 +1057,14 @@
           }
         }
       } catch (error) {
-        if (current === session) fail(cameraError(error));
+        if (current !== session) return;
+        if (switching && !stream) {
+          stopCamera();
+          notify('無法開啟另一顆鏡頭，正在恢復原鏡頭。');
+          startCamera();
+        } else {
+          fail(cameraError(error));
+        }
       } finally {
         if (current === session) starting = false;
       }
@@ -599,14 +1098,12 @@
       shutter.disabled = true;
       const current = session;
       try {
-        // Redraw the last filtered frame before encoding, even after the drawing buffer was cleared.
-        renderer.present();
-        canvas.toBlob((blob) => {
+        renderer.capture((blob) => {
           shutter.disabled = false;
           if (current !== session) return;
           if (blob) showPhoto(blob);
           else notify('照片儲存失敗，請再拍一次。');
-        }, 'image/jpeg', 0.92);
+        });
       } catch (error) {
         console.error(error);
         shutter.disabled = false;
@@ -614,11 +1111,11 @@
       }
     }
 
-    slider.addEventListener('input', () => {
-      strength = Number(slider.value) / 100;
-      $('level').textContent = slider.value + '%';
-      slider.setAttribute('aria-valuetext', slider.value + '%');
-      renderer?.resetHistory();
+    $('flip').addEventListener('click', () => {
+      if (!running || starting) return;
+      const direction = facing === 'environment' ? 'user' : 'environment';
+      stopCamera();
+      startCamera({ direction, switching: true });
     });
     shutter.addEventListener('click', takePhoto);
     review.addEventListener('close', () => {
@@ -649,34 +1146,38 @@
     });
     document.addEventListener('fullscreenchange', updateFullscreen);
     new ResizeObserver(() => { sizeDirty = true; }).observe(app);
-    start.addEventListener('click', startCamera);
+    start.addEventListener('click', () => startCamera());
     video.addEventListener('error', () => {
       if (stream) fail('相機畫面無法播放。請重新啟動相機。');
     });
     canvas.addEventListener('webglcontextlost', (event) => {
       event.preventDefault();
+      contextLost = true;
+      resumePending ||= Boolean(stream || starting);
       renderer = undefined;
       stopCamera();
       cameraScreen('圖形處理暫時中斷，等待瀏覽器恢復…');
     });
     canvas.addEventListener('webglcontextrestored', () => {
-      if (document.hidden) cameraScreen('圖形處理已恢復。請重新啟動相機。', true);
-      else startCamera();
+      contextLost = false;
+      if (resumePending && !document.hidden) startCamera();
+      else cameraScreen('圖形處理已恢復。請重新啟動相機。', true);
     });
+
+    function suspendCamera() {
+      resumePending ||= Boolean(stream || starting);
+      if (stream || starting) {
+        stopCamera();
+        cameraScreen('相機已暫停，返回頁面後將重新啟動。');
+      }
+    }
+
     document.addEventListener('visibilitychange', () => {
-      cancelAnimationFrame(frameRequest);
-      if (!stream || document.hidden) return;
-      resetTiming();
-      sizeDirty = true;
-      playDeadline = performance.now() + 8000;
-      const current = session;
-      video.play().catch(() => {
-        if (current === session && !document.hidden) fail('請按「啟動相機」恢復畫面。');
-      });
-      frameRequest = requestAnimationFrame(render);
+      if (document.hidden) suspendCamera();
+      else if (resumePending) startCamera();
     });
-    window.addEventListener('pagehide', stopCamera);
-    window.addEventListener('pageshow', (event) => { if (event.persisted) startCamera(); });
+    window.addEventListener('pagehide', suspendCamera);
+    window.addEventListener('pageshow', (event) => { if (event.persisted && resumePending) startCamera(); });
 
     startCamera();
   </script>
