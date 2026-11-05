@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101013">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>LSD-CAMERA</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 16px/1.45 system-ui, sans-serif;
+      color: #f9f7ff;
+      background: #101013;
+      --accent: #dbff92;
+      --glass: rgba(17, 16, 22, .88);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    button, input, a { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    button { color: inherit; cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    #app { position: fixed; inset: 0; overflow: hidden; isolation: isolate; background: #101013; }
+    #camera, #view { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #camera { object-fit: cover; pointer-events: none; }
+    #view { display: block; background: #101013; }
+    .gate {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      overflow: auto; padding: 24px;
+      background: radial-gradient(ellipse at 78% 18%, #3a2352, transparent 55%),
+                  radial-gradient(ellipse at 12% 85%, #1b413b, #111016 72%);
+    }
+    .intro { width: min(100%, 25rem); padding: 8px; }
+    .eyebrow { margin: 0 0 10px; color: var(--accent); letter-spacing: .2em; font-size: .75rem; }
+    h1 { margin: 0; font-size: clamp(2rem, 9vw, 3.65rem); line-height: 1; letter-spacing: -.065em; }
+    #status { color: #e1dbea; margin: 18px 0 22px; }
+    .action {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+      padding: 8px 18px; border: 1px solid #ffffff35; border-radius: 999px;
+      background: #282432; color: #fff; text-decoration: none;
+    }
+    .primary { background: var(--accent); border-color: var(--accent); color: #152008; font-weight: 700; }
+    .controls {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; justify-content: center; gap: 12px;
+      padding: 12px max(12px, env(safe-area-inset-right))
+               max(14px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    }
+    .strength {
+      display: grid; grid-template-columns: 1fr auto; align-items: center;
+      width: min(60vw, 19rem); min-width: 0; padding: 8px 15px 5px; border-radius: 18px;
+      background: var(--glass); border: 1px solid #ffffff2c; font-size: .8rem;
+    }
+    output { color: var(--accent); font-variant-numeric: tabular-nums; }
+    input[type=range] { grid-column: 1 / -1; width: 100%; height: 30px; margin: 0; accent-color: var(--accent); }
+    #shutter {
+      display: grid; place-items: center; width: 64px; height: 64px; flex: none;
+      border: 2px solid #fff; border-radius: 50%; background: var(--glass);
+      box-shadow: 0 2px 12px #0007;
+    }
+    #shutter::before { content: ""; width: 46px; height: 46px; border-radius: 50%; background: #fff; }
+    #shutter:active::before { transform: scale(.85); background: var(--accent); }
+    #fullscreen {
+      position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right));
+      display: grid; place-items: center; width: 44px; height: 44px; padding: 0;
+      border: 1px solid #ffffff35; border-radius: 14px; background: var(--glass);
+    }
+    #notice {
+      position: absolute; top: max(12px, env(safe-area-inset-top)); left: 50%; translate: -50% 0;
+      max-width: 68vw; margin: 0; padding: 6px 13px; border-radius: 18px;
+      background: var(--glass); text-align: center; pointer-events: none;
+    }
+    #notice:empty { display: none; }
+    dialog {
+      width: min(92vw, 30rem); max-height: 90%; overflow: auto; padding: 13px;
+      background: #17151e; border: 1px solid #ffffff35; border-radius: 20px; color: inherit;
+    }
+    dialog::backdrop { background: #050509d9; }
+    .photo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    h2 { font-size: 1rem; margin: 0 0 0 4px; }
+    #photo { display: block; width: 100%; height: auto; max-height: 58vh; object-fit: contain; background: #09080d; border-radius: 10px; }
+    .photo-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    #share-status { margin: 8px 4px 0; font-size: .85rem; }
+    #share-status:empty { display: none; }
+    @media (orientation: landscape) and (max-height: 480px) {
+      #photo { max-height: 46vh; }
+      .controls { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <main id="app">
+    <video id="camera" autoplay muted playsinline aria-hidden="true"></video>
+    <canvas id="view" aria-label="即時濾鏡相機畫面"></canvas>
+
+    <section id="gate" class="gate" aria-labelledby="title">
+      <div class="intro">
+        <p class="eyebrow">即時迷幻濾鏡</p>
+        <h1 id="title">LSD-CAMERA</h1>
+        <p id="status" role="status">正在啟動相機…</p>
+        <button id="start" class="action primary" type="button" hidden>啟動相機</button>
+        <noscript>請在瀏覽器啟用 JavaScript，再重新整理頁面。</noscript>
+      </div>
+    </section>
+
+    <button id="fullscreen" type="button" aria-label="進入全螢幕" hidden>
+      <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path id="fullscreen-icon" d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5"/>
+      </svg>
+    </button>
+    <div class="controls" id="controls" hidden>
+      <div class="strength">
+        <label for="intensity">效果強度</label>
+        <output id="level" for="intensity" aria-hidden="true">58%</output>
+        <input id="intensity" type="range" min="0" max="100" value="58" aria-valuetext="58%">
+      </div>
+      <button id="shutter" type="button" aria-label="拍照"></button>
+    </div>
+    <p id="notice" role="status"></p>
+
+    <dialog id="review" aria-labelledby="photo-title">
+      <div class="photo-head">
+        <h2 id="photo-title">拍攝預覽</h2>
+        <form method="dialog"><button class="action" type="submit" autofocus>返回相機</button></form>
+      </div>
+      <img id="photo" alt="剛拍下的濾鏡照片">
+      <div class="photo-actions">
+        <a class="action" id="download" download>下載照片</a>
+        <button class="action primary" id="share" type="button" hidden>分享／儲存</button>
+      </div>
+      <p id="share-status" role="status"></p>
+    </dialog>
+  </main>
+  <script>
+    'use strict';
+
+    const $ = (id) => document.getElementById(id);
+    const app = $('app');
+    const video = $('camera');
+    const canvas = $('view');
+    const gate = $('gate');
+    const start = $('start');
+    const controls = $('controls');
+    const slider = $('intensity');
+    const shutter = $('shutter');
+    const fullscreen = $('fullscreen');
+    const review = $('review');
+    const share = $('share');
+
+    const vertexSource = `
+      attribute vec2 aPosition;
+      varying mediump vec2 vUv;
+      void main() {
+        vUv = 0.5 * (aPosition + 1.0);
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }
+    `;
+
+    const effectSource = `
+      #ifdef GL_FRAGMENT_PRECISION_HIGH
+      precision highp float;
+      #else
+      precision mediump float;
+      #endif
+      varying mediump vec2 vUv;
+      uniform sampler2D uCamera;
+      uniform sampler2D uHistory;
+      uniform vec2 uCrop;
+      uniform vec2 uMetric;
+      uniform float uPhase;
+      uniform float uStrength;
+      uniform float uDecay;
+
+      vec3 cameraAt(vec2 uv) {
+        vec2 cover = (clamp(uv, 0.0, 1.0) - 0.5) * uCrop + 0.5;
+        return texture2D(uCamera, vec2(cover.x, 1.0 - cover.y)).rgb;
+      }
+
+      void main() {
+        vec3 original = cameraAt(vUv);
+        float s = uStrength;
+        if (s <= 0.0) {
+          gl_FragColor = vec4(original, 1.0);
+          return;
+        }
+
+        float t = uPhase;
+        vec2 p = (vUv - 0.5) * uMetric;
+        // Traveling waves bend the whole image. The slower field stretches it downwards.
+        vec2 wave = vec2(sin(13.0*p.y + 3.0*t + 1.6*sin(6.0*p.x - t)),
+                         sin(10.0*p.x - 2.0*t + 1.2*sin(8.0*p.y + t)));
+        float melt = 0.5 + 0.5*sin(16.0*p.x + 1.8*sin(5.0*p.y + t) - 2.0*t);
+        float ripple = sin(18.0*length(p) - 3.0*t + 1.2*sin(7.0*p.x + t));
+        float edge = smoothstep(0.0, 0.13, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
+        vec2 offset = 0.024*wave + vec2(0.016*ripple, 0.076*melt*melt - 0.020);
+        vec2 warped = vUv + edge*s*offset/uMetric;
+        vec2 split = edge*s*(0.006 + 0.008*melt)*vec2(cos(t), sin(2.0*t))/uMetric;
+        vec3 color = vec3(cameraAt(warped + split).r,
+                          cameraAt(warped).g,
+                          cameraAt(warped - split).b);
+
+        // Rotate chroma and retain image luminance. A flowing tint also colors neutral scenes.
+        float lum = dot(color, vec3(0.299, 0.587, 0.114));
+        vec2 chroma = vec2(color.b - lum, color.r - lum);
+        float angle = s*(2.6*sin(t + 2.0*p.x) + 1.4*sin(2.0*t - 3.0*p.y));
+        float c = cos(angle);
+        float k = sin(angle);
+        chroma = mat2(c, k, -k, c)*chroma*(1.0 + 0.53*s);
+        color = vec3(lum + chroma.y, lum - (0.114*chroma.x + 0.299*chroma.y)/0.587, lum + chroma.x);
+        vec3 palette = sin(vec3(0.0, 2.0944, 4.1888) + 2.0*t + 5.0*p.x - 4.0*p.y + melt);
+        color += palette * (0.23*s) * (4.0*lum*(1.0-lum));
+        color = mix(clamp(color, 0.0, 1.0), original, 0.10 + 0.13*s);
+
+        // Read only the previous framebuffer. Slight drift makes older frames trail behind.
+        vec2 drift = edge*s*vec2(0.013*wave.x, 0.012 + 0.009*wave.y)/uMetric;
+        vec3 history = texture2D(uHistory, vUv + drift).rgb;
+        gl_FragColor = vec4(mix(color, history, uDecay), 1.0);
+      }
+    `;
+
+    const displaySource = `
+      precision mediump float;
+      varying mediump vec2 vUv;
+      uniform sampler2D uImage;
+      void main() { gl_FragColor = texture2D(uImage, vUv); }
+    `;
+
+    const pixelBudgets = [720000, 510000, 350000, 230000, 155000];
+    const framePeriod = 1000 / 30;
+
+    function program(gl, vertex, fragmentSource, uniformNames) {
+      const fragment = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragment, fragmentSource);
+      gl.compileShader(fragment);
+      if (!gl.getShaderParameter(fragment, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(fragment));
+      }
+      const handle = gl.createProgram();
+      gl.attachShader(handle, vertex);
+      gl.attachShader(handle, fragment);
+      gl.bindAttribLocation(handle, 0, 'aPosition');
+      gl.linkProgram(handle);
+      gl.deleteShader(fragment);
+      if (!gl.getProgramParameter(handle, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(handle));
+      }
+      const uniforms = {};
+      for (const name of uniformNames) uniforms[name] = gl.getUniformLocation(handle, name);
+      return { handle, ...uniforms };
+    }
+
+    function makeRenderer() {
+      const gl = canvas.getContext('webgl', {
+        alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false
+      });
+      if (!gl || gl.isContextLost()) throw new Error('WebGL unavailable');
+
+      const vertex = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertex, vertexSource);
+      gl.compileShader(vertex);
+      if (!gl.getShaderParameter(vertex, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(vertex));
+      }
+      const fx = program(gl, vertex, effectSource, [
+        'uCamera', 'uHistory', 'uCrop', 'uMetric', 'uPhase', 'uStrength', 'uDecay'
+      ]);
+      const copy = program(gl, vertex, displaySource, ['uImage']);
+      gl.deleteShader(vertex);
+      gl.disable(gl.DITHER);
+      const triangle = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, triangle);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+      function createTexture() {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return texture;
+      }
+
+      const cameraTexture = createTexture();
+      const targets = [0, 1].map(() => ({
+        texture: createTexture(), framebuffer: gl.createFramebuffer()
+      }));
+      const maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+      const maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+      let last = 0;
+      let valid = false;
+      let width = 0;
+      let height = 0;
+      let sourceWidth = 0;
+      let sourceHeight = 0;
+
+      function resize(cssWidth, cssHeight, budget) {
+        const scale = Math.min(devicePixelRatio || 1, Math.sqrt(budget / (cssWidth * cssHeight)),
+          maxTexture / Math.max(cssWidth, cssHeight), maxViewport[0] / cssWidth, maxViewport[1] / cssHeight);
+        const w = Math.max(1, Math.floor(cssWidth * scale));
+        const h = Math.max(1, Math.floor(cssHeight * scale));
+        if (w === width && h === height) return false;
+        canvas.width = width = w;
+        canvas.height = height = h;
+        gl.viewport(0, 0, w, h);
+        gl.activeTexture(gl.TEXTURE0);
+        for (const { texture, framebuffer } of targets) {
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+            throw new Error('Incomplete filter framebuffer');
+          }
+        }
+        valid = false;
+        return true;
+      }
+
+      function present() {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(copy.handle);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, targets[last].texture);
+        gl.uniform1i(copy.uImage, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+
+      function draw(phase, strength, elapsed, upload) {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cameraTexture);
+        if (vw !== sourceWidth || vh !== sourceHeight) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          sourceWidth = vw;
+          sourceHeight = vh;
+          valid = false;
+        } else if (upload) {
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        }
+
+        const next = 1 - last;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[next].framebuffer);
+        gl.useProgram(fx.handle);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, targets[last].texture);
+        gl.uniform1i(fx.uCamera, 0);
+        gl.uniform1i(fx.uHistory, 1);
+        const aspect = width / height;
+        const sourceAspect = vw / vh;
+        gl.uniform2f(fx.uCrop, Math.min(1, aspect / sourceAspect), Math.min(1, sourceAspect / aspect));
+        gl.uniform2f(fx.uMetric, Math.max(1, aspect), Math.max(1, 1 / aspect));
+        gl.uniform1f(fx.uPhase, phase);
+        gl.uniform1f(fx.uStrength, strength);
+        gl.uniform1f(fx.uDecay, valid ? Math.pow(0.76 * strength, Math.max(0.5, elapsed / framePeriod)) : 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        last = next;
+        valid = true;
+        present();
+      }
+
+      return { resize, draw, present, resetHistory: () => { valid = false; } };
+    }
+
+    let renderer;
+    let stream;
+    let starting = false;
+    let running = false;
+    let session = 0;
+    let frameRequest = 0;
+    let videoRequest = null;
+    let videoDirty = true;
+    let previousVideoTime = -1;
+    let sizeDirty = true;
+    let quality = 0;
+    let stableWindows = 0;
+    let sampleStart = 0;
+    let sampleFrames = 0;
+    let nextFrame = 0;
+    let lastFrame = 0;
+    let playDeadline = 0;
+    let strength = Number(slider.value) / 100;
+    let photoUrl;
+    let photoFile;
+    let noticeTimer;
+
+    function cameraScreen(message, canRetry = false) {
+      gate.hidden = false;
+      controls.hidden = true;
+      fullscreen.hidden = true;
+      $('status').textContent = message;
+      start.hidden = !canRetry;
+    }
+
+    function notify(message) {
+      $('notice').textContent = message;
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 2800);
+    }
+
+    function resetTiming() {
+      nextFrame = lastFrame = sampleStart = sampleFrames = stableWindows = 0;
+      videoDirty = true;
+      previousVideoTime = -1;
+      renderer?.resetHistory();
+    }
+
+    function stopCamera() {
+      session++;
+      starting = running = false;
+      cancelAnimationFrame(frameRequest);
+      if (videoRequest !== null) video.cancelVideoFrameCallback(videoRequest);
+      videoRequest = null;
+      stream?.getTracks().forEach((track) => track.stop());
+      stream = undefined;
+      video.srcObject = null;
+      resetTiming();
+    }
+
+    function fail(message) {
+      stopCamera();
+      cameraScreen(message, true);
+    }
+
+    function recordPerformance(now) {
+      if (!sampleStart) sampleStart = now;
+      sampleFrames++;
+      const duration = now - sampleStart;
+      if (duration < 2100) return;
+      const fps = 1000 * (sampleFrames - 1) / duration;
+      if (fps < 28 && quality < pixelBudgets.length - 1) {
+        quality++;
+        sizeDirty = true;
+        stableWindows = 0;
+      } else if (fps >= 29.5 && quality > 0) {
+        if (++stableWindows >= 7) {
+          quality--;
+          sizeDirty = true;
+          stableWindows = 0;
+        }
+      } else {
+        stableWindows = 0;
+      }
+      sampleStart = now;
+      sampleFrames = 1;
+    }
+
+    function render(now) {
+      if (document.hidden || !stream) return;
+      frameRequest = requestAnimationFrame(render);
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
+        if (now > playDeadline) fail('相機未送出畫面。請確認相機可用後再試一次。');
+        return;
+      }
+      playDeadline = now + 8000;
+      // A small tolerance avoids dropping frames at refresh rates near 60 Hz.
+      if (now + 1.5 < nextFrame && !sizeDirty) return;
+      nextFrame = nextFrame && now - nextFrame < framePeriod ? nextFrame + framePeriod : now + framePeriod;
+      try {
+        if (sizeDirty) {
+          renderer.resize(app.clientWidth || 1, app.clientHeight || 1, pixelBudgets[quality]);
+          sizeDirty = false;
+        }
+        const upload = videoDirty || (!video.requestVideoFrameCallback && previousVideoTime !== video.currentTime);
+        renderer.draw((now * 0.00048) % (2 * Math.PI), strength, lastFrame ? now - lastFrame : framePeriod, upload);
+        previousVideoTime = video.currentTime;
+        videoDirty = false;
+      } catch (error) {
+        if (canvas.getContext('webgl')?.isContextLost()) return;
+        console.error(error);
+        fail('無法處理相機畫面。請重新啟動相機。');
+        return;
+      }
+      lastFrame = now;
+      if (!running) {
+        running = true;
+        gate.hidden = true;
+        controls.hidden = false;
+        updateFullscreen();
+      }
+      recordPerformance(now);
+    }
+
+    function watchVideo() {
+      if (!video.requestVideoFrameCallback || videoRequest !== null) return;
+      function onFrame() {
+        videoDirty = true;
+        videoRequest = video.requestVideoFrameCallback(onFrame);
+      }
+      videoRequest = video.requestVideoFrameCallback(onFrame);
+    }
+
+    function cameraError(error) {
+      switch (error.name) {
+        case 'NotAllowedError':
+        case 'SecurityError':
+          return '請在瀏覽器的網站設定允許相機，再按「啟動相機」。';
+        case 'NotFoundError':
+        case 'OverconstrainedError':
+          return '找不到可用的相機。';
+        case 'NotReadableError':
+        case 'AbortError':
+          return '無法讀取相機。請關閉其他可能正在使用相機的應用程式，再試一次。';
+        default:
+          return '相機啟動失敗。請按「啟動相機」再試一次。';
+      }
+    }
+
+    async function startCamera() {
+      if (starting || stream) return;
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        cameraScreen('請用 Android Chrome 或 iPhone Safari 開啟 HTTPS 網址。電腦也可使用 localhost 測試。');
+        return;
+      }
+      const current = ++session;
+      starting = true;
+      cameraScreen('正在啟動相機…');
+      try {
+        renderer ??= makeRenderer();
+      } catch (error) {
+        console.error(error);
+        fail('瀏覽器無法啟用 WebGL。請確認瀏覽器支援 WebGL，再試一次。');
+        return;
+      }
+
+      try {
+        const preferred = {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 }, height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 }
+        };
+        let acquired;
+        try {
+          acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: preferred });
+        } catch (error) {
+          if (current !== session || !['OverconstrainedError', 'NotFoundError'].includes(error.name)) throw error;
+          acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+        }
+        if (current !== session) {
+          acquired.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = acquired;
+        stream.getVideoTracks()[0].addEventListener('ended', () => {
+          if (current === session) fail('相機已中斷。請按「啟動相機」重新連線。');
+        });
+        video.srcObject = stream;
+        resetTiming();
+        sizeDirty = true;
+        playDeadline = performance.now() + 8000;
+        watchVideo();
+        frameRequest = requestAnimationFrame(render);
+        try {
+          await video.play();
+        } catch (error) {
+          if (current === session && !document.hidden) {
+            fail('請按「啟動相機」，讓瀏覽器開始播放相機畫面。');
+          }
+        }
+      } catch (error) {
+        if (current === session) fail(cameraError(error));
+      } finally {
+        if (current === session) starting = false;
+      }
+    }
+
+    function updateFullscreen() {
+      fullscreen.hidden = !running || !document.fullscreenEnabled || !app.requestFullscreen;
+      const active = Boolean(document.fullscreenElement);
+      fullscreen.setAttribute('aria-label', active ? '離開全螢幕' : '進入全螢幕');
+      $('fullscreen-icon').setAttribute('d', active
+        ? 'M4 9h5V4m6 0v5h5m0 6h-5v5m-6 0v-5H4'
+        : 'M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5');
+    }
+
+    function showPhoto(blob) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = 'LSD-CAMERA-' + stamp + (blob.type === 'image/jpeg' ? '.jpg' : '.png');
+      if (photoUrl) URL.revokeObjectURL(photoUrl);
+      photoUrl = URL.createObjectURL(blob);
+      photoFile = new File([blob], filename, { type: blob.type });
+      $('photo').src = photoUrl;
+      $('download').href = photoUrl;
+      $('download').download = filename;
+      share.hidden = !navigator.share || !navigator.canShare?.({ files: [photoFile] });
+      $('share-status').textContent = '';
+      review.showModal();
+    }
+
+    function takePhoto() {
+      if (!running || shutter.disabled || review.open) return;
+      shutter.disabled = true;
+      const current = session;
+      try {
+        // Redraw the last filtered frame before encoding, even after the drawing buffer was cleared.
+        renderer.present();
+        canvas.toBlob((blob) => {
+          shutter.disabled = false;
+          if (current !== session) return;
+          if (blob) showPhoto(blob);
+          else notify('照片儲存失敗，請再拍一次。');
+        }, 'image/jpeg', 0.92);
+      } catch (error) {
+        console.error(error);
+        shutter.disabled = false;
+        notify('無法拍照，請再試一次。');
+      }
+    }
+
+    slider.addEventListener('input', () => {
+      strength = Number(slider.value) / 100;
+      $('level').textContent = slider.value + '%';
+      slider.setAttribute('aria-valuetext', slider.value + '%');
+      renderer?.resetHistory();
+    });
+    shutter.addEventListener('click', takePhoto);
+    review.addEventListener('close', () => {
+      if (review.open) return;
+      URL.revokeObjectURL(photoUrl);
+      photoUrl = photoFile = undefined;
+      $('photo').removeAttribute('src');
+      $('download').removeAttribute('href');
+    });
+    share.addEventListener('click', async () => {
+      if (!photoFile) return;
+      share.disabled = true;
+      try {
+        await navigator.share({ files: [photoFile] });
+      } catch (error) {
+        if (error.name !== 'AbortError') $('share-status').textContent = '無法開啟分享選單。你可以直接下載照片。';
+      } finally {
+        share.disabled = false;
+      }
+    });
+    fullscreen.addEventListener('click', async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await app.requestFullscreen();
+      } catch {
+        notify('目前無法切換全螢幕。');
+      }
+    });
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    new ResizeObserver(() => { sizeDirty = true; }).observe(app);
+    start.addEventListener('click', startCamera);
+    video.addEventListener('error', () => {
+      if (stream) fail('相機畫面無法播放。請重新啟動相機。');
+    });
+    canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      renderer = undefined;
+      stopCamera();
+      cameraScreen('圖形處理暫時中斷，等待瀏覽器恢復…');
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (document.hidden) cameraScreen('圖形處理已恢復。請重新啟動相機。', true);
+      else startCamera();
+    });
+    document.addEventListener('visibilitychange', () => {
+      cancelAnimationFrame(frameRequest);
+      if (!stream || document.hidden) return;
+      resetTiming();
+      sizeDirty = true;
+      playDeadline = performance.now() + 8000;
+      const current = session;
+      video.play().catch(() => {
+        if (current === session && !document.hidden) fail('請按「啟動相機」恢復畫面。');
+      });
+      frameRequest = requestAnimationFrame(render);
+    });
+    window.addEventListener('pagehide', stopCamera);
+    window.addEventListener('pageshow', (event) => { if (event.persisted) startCamera(); });
+
+    startCamera();
+  </script>
+</body>
+</html>
